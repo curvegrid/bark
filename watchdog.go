@@ -44,7 +44,7 @@ type Watchdog struct {
 	// Attr                  os.ProcAttr
 	err              error
 	needRestart      bool
-	startingProcess      bool
+	startingProcess  bool
 	cmd              *exec.Cmd
 	exitAfterReaping bool
 	sout             bytes.Buffer
@@ -72,7 +72,7 @@ func NewWatchdog(
 	w := &Watchdog{
 		PathToChildExecutable: pathToChildExecutable,
 		Args:                     cpOfArgs,
-		Starting:                  make(chan bool, 1),
+		Starting:                 make(chan bool, 1),
 		Ready:                    make(chan bool),
 		Restarting:               make(chan bool, 1),
 		RestartChild:             make(chan bool),
