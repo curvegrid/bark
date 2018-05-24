@@ -15,7 +15,7 @@ import (
 type WatchdogLogFunc func(format string, a ...interface{})
 
 type Watchdog struct {
-	Booting                  chan bool
+	Starting                 chan bool
 	Ready                    chan bool
 	Restarting               chan bool
 	RestartChild             chan bool
@@ -44,7 +44,7 @@ type Watchdog struct {
 	// Attr                  os.ProcAttr
 	err              error
 	needRestart      bool
-	initialBoot      bool
+	startingProcess      bool
 	cmd              *exec.Cmd
 	exitAfterReaping bool
 	sout             bytes.Buffer
@@ -72,7 +72,7 @@ func NewWatchdog(
 	w := &Watchdog{
 		PathToChildExecutable: pathToChildExecutable,
 		Args:                     cpOfArgs,
-		Booting:                  make(chan bool, 1),
+		Starting:                  make(chan bool, 1),
 		Ready:                    make(chan bool),
 		Restarting:               make(chan bool, 1),
 		RestartChild:             make(chan bool),
@@ -169,7 +169,7 @@ func (w *Watchdog) Start() {
 
 	signal.Notify(signalChild, syscall.SIGCHLD)
 
-	w.initialBoot = true
+	w.startingProcess = true
 	w.needRestart = true
 	var ws syscall.WaitStatus
 	go func() {
@@ -216,8 +216,8 @@ func (w *Watchdog) Start() {
 				w.cmd.Stdout = &w.sout
 				w.cmd.Stderr = &w.serr
 
-				if w.initialBoot {
-					w.Booting <- true
+				if w.startingProcess {
+					w.Starting <- true
 				} else {
 					w.Restarting <- true
 				}
@@ -230,8 +230,8 @@ func (w *Watchdog) Start() {
 				w.curPid = w.cmd.Process.Pid
 				w.needRestart = false
 				w.startCount++
-				if w.initialBoot {
-					w.initialBoot = false
+				if w.startingProcess {
+					w.startingProcess = false
 				}
 
 				w.mut.Lock()
