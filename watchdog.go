@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -15,9 +16,7 @@ import (
 type WatchdogLogFunc func(format string, a ...interface{})
 
 type Watchdog struct {
-	Starting                 chan bool
 	Ready                    chan bool
-	Restarting               chan bool
 	RestartChild             chan bool
 	ReqStopWatchdog          chan bool
 	TermChildAndStopWatchdog chan bool
@@ -30,8 +29,8 @@ type Watchdog struct {
 
 	startCount int64
 
-	MaxRetries             int
-	retryCount             int
+	MaxRetries             int64
+	retryCount             int64
 	RetryInterval          time.Duration
 	DeclareSuccessInterval time.Duration // time after which process is declared successfully (re)started
 
@@ -70,20 +69,18 @@ func NewWatchdog(
 		cpOfArgs = append(cpOfArgs, args[i])
 	}
 	w := &Watchdog{
-		PathToChildExecutable: pathToChildExecutable,
+		PathToChildExecutable:    pathToChildExecutable,
 		Args:                     cpOfArgs,
-		Starting:                 make(chan bool, 1),
 		Ready:                    make(chan bool),
-		Restarting:               make(chan bool, 1),
 		RestartChild:             make(chan bool),
 		ReqStopWatchdog:          make(chan bool),
 		TermChildAndStopWatchdog: make(chan bool),
-		Done:                   make(chan bool),
-		CurrentPid:             make(chan int),
-		Cwd:                    cwd,
-		MaxRetries:             10,
-		RetryInterval:          5 * time.Second,
-		DeclareSuccessInterval: 10 * time.Second,
+		Done:                     make(chan bool),
+		CurrentPid:               make(chan int),
+		Cwd:                      cwd,
+		MaxRetries:               10,
+		RetryInterval:            5 * time.Second,
+		DeclareSuccessInterval:   10 * time.Second,
 	}
 
 	// if attr != nil {
@@ -188,13 +185,13 @@ func (w *Watchdog) Start() {
 
 	reaploop:
 		for {
-			w.mut.Lock()
-			if w.retryCount > w.MaxRetries {
-				w.logEvent(true, "unable to start after %v retries, giving up", w.retryCount)
-				w.err = fmt.Errorf("unable to start process after %v retries, giving up", w.retryCount)
+			retryCount := atomic.LoadInt64(&w.retryCount)
+			if retryCount > w.MaxRetries {
+				w.logEvent(true, "unable to start after %v retries, giving up", retryCount)
+				err = fmt.Errorf("unable to start process after %v retries, giving up", retryCount)
+				w.SetErr(err)
 				return
 			}
-			w.mut.Unlock()
 
 			if w.needRestart {
 				if w.cmd != nil && w.cmd.Process != nil {
@@ -203,12 +200,10 @@ func (w *Watchdog) Start() {
 				w.logEvent(true, "about to start '%s'", w.PathToChildExecutable)
 				//w.cmd.SysProcAttr = &w.Attr;
 
-				w.mut.Lock()
-				if w.retryCount > 0 {
-					w.logEvent(true, "sleeping for %v before attempting restart; retryCount = %v (max = %v)", w.RetryInterval, w.retryCount, w.MaxRetries)
+				if retryCount > 0 {
+					w.logEvent(true, "sleeping for %v before attempting restart; retryCount = %v (max = %v)", w.RetryInterval, retryCount, w.MaxRetries)
 					time.Sleep(w.RetryInterval)
 				}
-				w.mut.Unlock()
 
 				w.cmd = exec.Command(w.PathToChildExecutable, w.Args...)
 				w.cmd.Dir = w.Cwd
@@ -216,15 +211,10 @@ func (w *Watchdog) Start() {
 				w.cmd.Stdout = &w.sout
 				w.cmd.Stderr = &w.serr
 
-				if w.startingProcess {
-					w.Starting <- true
-				} else {
-					w.Restarting <- true
-				}
 				err = w.cmd.Start()
 				if err != nil {
-					w.err = err
-					w.logEvent(true, "unable to start: '%v' '%v' '%v'", w.err, w.sout.String(), w.serr.String())
+					w.SetErr(err)
+					w.logEvent(true, "unable to start: '%v' '%v' '%v'", err, w.sout.String(), w.serr.String())
 					return
 				}
 				w.curPid = w.cmd.Process.Pid
@@ -234,19 +224,16 @@ func (w *Watchdog) Start() {
 					w.startingProcess = false
 				}
 
-				w.mut.Lock()
-				w.retryCount++
+				// increment the counter
+				retryCount = atomic.AddInt64(&w.retryCount, 1)
 
 				// reset retry count after an interval of process stability
-				go func(currRetryCount int) {
+				go func(currRetryCount int64) {
 					time.Sleep(w.DeclareSuccessInterval)
-					w.mut.Lock()
-					if w.retryCount == currRetryCount {
-						w.retryCount = 0
+					if atomic.LoadInt64(&w.retryCount) == currRetryCount {
+						atomic.StoreInt64(&w.retryCount, 0)
 					}
-					w.mut.Unlock()
-				}(w.retryCount)
-				w.mut.Unlock()
+				}(retryCount)
 
 				w.logEvent(true, "started pid %d '%s'; total start count %d", w.cmd.Process.Pid, w.PathToChildExecutable, w.startCount)
 			}
@@ -320,7 +307,7 @@ func (w *Watchdog) Start() {
 					}
 				} // end for i
 				w.SetErr(fmt.Errorf("could not reap child PID %d or obtain wait4(WNOHANG)==0 even after 1000 attempts", w.cmd.Process.Pid))
-				w.logEvent(false, "%s", w.err)
+				w.logEvent(false, "%s", w.GetErr())
 				return
 			} // end select
 		} // end for reaploop
