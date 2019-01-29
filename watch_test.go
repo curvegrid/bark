@@ -11,7 +11,9 @@ import (
 func Test100WatchdogShouldNoticeAndRestartChild(t *testing.T) {
 
 	cv.Convey("our Watchdog goroutine should be able to restart the child process upon request", t, func() {
-		watcher := NewWatchdog(nil, "./testcmd/sleep50")
+		watcher := NewWatchdog("./testcmd", "./sleep50")
+		watcher.RetryInterval = 0
+		watcher.MaxRetries = 1000
 		watcher.Start()
 
 		var err error
@@ -45,7 +47,7 @@ func Test200WatchdogTerminatesUponRequest(t *testing.T) {
 
 	cv.Convey("our Watchdog goroutine should terminate its child process and stop upon request", t, func() {
 
-		watcher := NewWatchdog(nil, "./testcmd/sleep50", "arg1", "arg2")
+		watcher := NewWatchdog("./testcmd", "./sleep50", "arg1", "arg2")
 		watcher.Start()
 
 		sleepDur := 10 * time.Millisecond
