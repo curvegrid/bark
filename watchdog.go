@@ -74,7 +74,6 @@ func NewWatchdog(
 		RestartChild:             make(chan bool),
 		ReqStopWatchdog:          make(chan bool),
 		TermChildAndStopWatchdog: make(chan bool),
-		Done:                     make(chan bool),
 		CurrentPid:               make(chan int),
 		MaxRetries:               10,
 		RetryInterval:            5 * time.Second,
@@ -159,13 +158,14 @@ func (w *Watchdog) logEvent(isDebug bool, format string, a ...interface{}) {
 
 // see w.err for any error after w.Done
 func (w *Watchdog) Start() {
-
-	signalChild := make(chan os.Signal, 1)
-
-	signal.Notify(signalChild, syscall.SIGCHLD)
-
+	w.Done = make(chan bool)
 	w.startingProcess = true
 	w.needRestart = true
+	atomic.StoreInt64(&w.retryCount, 0)
+
+	signalChild := make(chan os.Signal, 1)
+	signal.Notify(signalChild, syscall.SIGCHLD)
+
 	var ws syscall.WaitStatus
 	go func() {
 		defer func() {
@@ -234,9 +234,9 @@ func (w *Watchdog) Start() {
 			case <-w.TermChildAndStopWatchdog:
 				w.logEvent(true, "TermChildAndStopWatchdog noted, exiting watchdog.Start() loop")
 
-				err := w.proc.Signal(syscall.SIGKILL)
+				err := w.proc.Signal(syscall.SIGTERM)
 				if err != nil {
-					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.proc.Pid, err)
+					err = fmt.Errorf("warning: watchdog tried to SIGTERM pid %d but got error: '%s'", w.proc.Pid, err)
 					w.SetErr(err)
 					w.logEvent(false, "%s", err)
 					return
